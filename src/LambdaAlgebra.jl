@@ -2,7 +2,7 @@ module LambdaAlgebra
 
 using TimerOutputs, PrettyTables, Base.Threads, DataStructures
 
-export periodic_algebra, lambda_algebra
+export periodic_algebra, lambda_algebra, pure_lambda_algebra
 export degree, is_homogeneous, dimension, differential, cycle
 export homology, homology!, truncate!, mark_differentials!
 export print_curtis_table, print_grid, print_stem

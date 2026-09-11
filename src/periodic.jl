@@ -131,7 +131,7 @@ end
 
 Construct the lambda algebra in odd characteristic `p`
 """
-function periodic_algebra(;p=3, top_degree=-1, dimension=STABLE_DIMENSION)
+function periodic_algebra(;p=3, top_degree=-1, μ_degree=-1, dimension=STABLE_DIMENSION)
     @assert isodd(p)
     K = GF{p}
 
@@ -181,16 +181,16 @@ function periodic_algebra(;p=3, top_degree=-1, dimension=STABLE_DIMENSION)
         degrees[vGen(j)] = (μ=1,λ=0,top=2*p^j-2)
     end
                                             
-    Λ = Algebra{p,LAMBDAV}(rules,diff,degrees,Dict(),Ref(-1),Ref(1), Ref(dimension))
+    Λ = Algebra{p,LAMBDAV}(rules,diff,degrees,dimension)
     # sanity check
     for g::GEN=1:NGEN, h::GEN=1:NGEN
         @assert is_admissible_pair(g,h) == (rules[g,h]==nothing)
     end
 
-    cache_basis!(Λ,top_degree)
+    cache_basis!(Λ,top_degree,μ_degree)
     if dimension≠STABLE_DIMENSION
         truncate!(Λ,dimension)
     end
     
-    Λ, [AlgebraElem(Λ,Dict(Monomial(λGen(i))=>one(K))) for i=1:NLAMBDA],[AlgebraElem(Λ,Dict(Monomial(vGen(i))=>one(K))) for i=0:NV]
+    Λ, [AlgebraElem(Λ,Monomial(λGen(i))) for i=1:NLAMBDA],[AlgebraElem(Λ,Monomial(vGen(i))) for i=0:NV]
 end

@@ -13,7 +13,7 @@ dimension(Λ::Algebra{p,LAMBDAMU},m::Monomial{p,LAMBDAMU}) where {p} = isempty(m
 
 Construct the lambda algebra in odd characteristic `p`
 """
-function lambda_algebra(;p=3, top_degree=-1, dimension=STABLE_DIMENSION)
+function lambda_algebra(;p=3, top_degree=-1, μ_degree=-1, dimension=STABLE_DIMENSION)
     p==2 && return lambda2_algebra(;top_degree,dimension)
     
     @assert isodd(p) # actually test isprime
@@ -80,16 +80,16 @@ function lambda_algebra(;p=3, top_degree=-1, dimension=STABLE_DIMENSION)
         degrees[μGen(j)] = (μ=1,λ=0,top=(2p-2)*j)
     end
                                             
-    Λ = Algebra{p,LAMBDAMU}(rules,diff,degrees,Dict(),Ref(-1),Ref(1),Ref(dimension))
+    Λ = Algebra{p,LAMBDAMU}(rules,diff,degrees,dimension)
     # sanity check
     for g::GEN=1:NGEN, h::GEN=1:NGEN
         @assert is_admissible_pair(g,h) == (rules[g,h]==nothing)
     end
 
-    cache_basis!(Λ,top_degree)
+    cache_basis!(Λ,top_degree,μ_degree)
     if dimension≠STABLE_DIMENSION
-#        truncate!(Λ,abs(dimension))
+        truncate!(Λ,abs(dimension))
     end
 
-    Λ, [AlgebraElem(Λ,SortedDict(Monomial(λGen(i))=>one(K))) for i=1:NLAMBDA],[AlgebraElem(Λ,SortedDict(Monomial(μGen(i))=>one(K))) for i=0:NMU]
+    Λ, [AlgebraElem(Λ,Monomial(λGen(i))) for i=1:NLAMBDA],[AlgebraElem(Λ,Monomial(μGen(i))) for i=0:NMU]
 end

@@ -186,25 +186,27 @@ end
 
 ################################################################
 # Algebra
-struct Algebra{p,Names}
+mutable struct Algebra{p,Names}
     rules::Matrix{Union{Nothing,Vector{Tuple{GF{p},Gen{p,Names},Gen{p,Names}}}}}
     diff::Vector{Vector{Tuple{GF{p},Gen{p,Names},Gen{p,Names}}}}
     degree::Vector{Degree}
     basis::Dict{Degree,Basis{p,Names}}
-    total::Ref{Int} # total degree to which we computed
-    page::Ref{Int} # page number along spectral sequence
-    dimension::Ref{Int} # record which sphere dimension we're looking at
+    total::Int # total degree to which we computed
+    page::Int # page number along spectral sequence
+    parent::Union{Nothing,Algebra{p,Names}}
+    dimension::Int # record which sphere dimension we're looking at
 end
+Algebra{p,Names}(rules,diff,degrees,dimension) where {p,Names} = Algebra{p,Names}(rules,diff,degrees,Dict(),-1,1,nothing,dimension)
 
 const STABLE_DIMENSION = typemax(Int)
 
 function Base.show(io::IO, Λ::Algebra{p,Names}) where {p,Names}
-    print(io, "E", superscript_string(Λ.page[])," page of Λ algebra for S",Λ.dimension[]==STABLE_DIMENSION ? "ˢᵗᵃᵇˡᵉ" : superscript_string(Λ.dimension[])," over 𝔽",subscript_string(p)," at total degree≤",Λ.total[])
+    print(io, "E", superscript_string(Λ.page)," page of Λ algebra for S",Λ.dimension==STABLE_DIMENSION ? "ˢᵗᵃᵇˡᵉ" : superscript_string(Λ.dimension)," over 𝔽",subscript_string(p)," at total degree≤",Λ.total)
 end
 Base.show(io::IO, ::MIME"text/plain", Λ::Algebra) = show(io, Λ)
 
 function Base.copy(Λ::Algebra{p,Names}) where {p,Names}
-    Algebra{p,Names}(Λ.rules,Λ.diff,Λ.degree,Dict(k=>copy(b) for (k,b)=Λ.basis),Ref(Λ.total[]),Ref(Λ.page[]),Ref(Λ.dimension[]))
+    Algebra{p,Names}(Λ.rules,Λ.diff,Λ.degree,Dict(k=>copy(b) for (k,b)=Λ.basis),Λ.total,Λ.page,Λ.parent,Λ.dimension)
 end
 
 ################################################################
@@ -217,9 +219,11 @@ end
 AlgebraElem(parent::Algebra{p,Names},w::SortedDict) where {p,Names} = AlgebraElem{p,Names}(parent,w)
 AlgebraElem(parent::Algebra{p,Names},w::Monomial{p,Names},c::GF{p} = one(GF{p})) where {p,Names} = AlgebraElem(parent,SortedDict(w=>c))
 
+nonzero_dict(d::SortedDict) = Dict(k=>v for (k,v)=d if !iszero(v))
+
 Base.copy(x::AlgebraElem) = typeof(x)(x.parent,copy(x.w))
-Base.:(==)(x::AlgebraElem{p,Names},y::AlgebraElem{p,Names}) where {p,Names} = x.w == y.w
-Base.hash(x::AlgebraElem,h::UInt64) = hash(x.w,h)
+Base.:(==)(x::AlgebraElem{p,Names},y::AlgebraElem{p,Names}) where {p,Names} = (nonzero_dict(x.w)==nonzero_dict(y.w))
+Base.hash(x::AlgebraElem,h::UInt64) = (hash(nonzero_dict(x.w),h))
 Base.iterate(x::AlgebraElem,state...) = iterate(x.w,state...)
 Base.length(x::AlgebraElem) = length(x.w)
 
@@ -227,12 +231,18 @@ function Base.show(io::IO, x::AlgebraElem)
     first = true
     for (k,v)=x
         iszero(v) && continue
-        first || print(io,"+")
-        isone(v) || print(io,v,"⋅")
+        first && print(io,"[")
+        if isone(v)
+            !first && print(io,"+")
+        elseif isone(-v)
+            print(io,"-")
+        else
+            print(io,"+",v,"⋅")
+        end
         print(io,k)
         first = false
     end
-    first && print(io,"𝟘")
+    first ? print(io,"𝟘") : print(io,"]",subscript_string(x.parent.page))
 end
 #Base.show(io::IO, ::MIME"text/plain", x::AlgebraElem) = show(io, x)
 
@@ -276,7 +286,15 @@ function dimension(x::AlgebraElem)
     maximum(dimension(x.parent,β) for β=keys(x.w))
 end
 
-Base.mergewith(f,a::SortedDict{K,V},b::SortedDict{K,V}...) where {K,V} = (a = copy(a); mergewith!(f,a,b...); a)
+function Base.mergewith(f,a::SortedDict{K,V},b::SortedDict{K,V}...) where {K,V}
+    if isempty(a)
+        a = empty(a)
+    else
+        a = copy(a)
+    end
+    mergewith!(f,a,b...)
+    a
+end
     
 function Base.:+(x::AlgebraElem{p,Names},y::AlgebraElem{p,Names}) where {p,Names}
     @assert x.parent == y.parent
@@ -351,7 +369,12 @@ end
 add_monomial!(x::AlgebraElem{p,Names},pair::Pair{Monomial{p,Names},GF{p}}) where {p,Names} = add_monomial!(x,pair...)
 
 function leading_monomial(x::AlgebraElem{p,Names}) where {p,Names}
-    last(x.w) # possible for SortedDict
+    l = last(x.w)
+    while iszero(l.second)
+        delete!(x.w,l.first)
+        l = last(x.w)
+    end
+    l # possible for SortedDict
 end
 
 """tagger(Λ, m)
@@ -376,20 +399,81 @@ function deep_tagger(Λ::Algebra{p,Names}, m::Monomial, deg::Degree) where {p,Na
     end
 end
 
-function reduce(Λ::Algebra{p,Names},x::AlgebraElem{p,Names}) where {p,Names}
-    z = zero(x)
-    z
+# find a boundary whose leading monomial is m
+function boundary(Λ::Algebra{p,Names},m::Monomial{p,Names},deg::Degree) where {p,Names}
+    j,y = Λ[deg][m]
+    if j==0
+        γ = deep_tagger(Λ,m,deg)
+        return γ.second*differential(Λ,γ.first)
+    else
+        @assert is_taggee(y)
+        return y.tag.second*differential(Λ,y.tag.first)
+    end
+end
+    
+# x is an element of Λ.parent
+function reduce!(Λ::Algebra{p,Names},x::AlgebraElem{p,Names}) where {p,Names}
+    if Λ.page==1 # nothing to reduce here, we just work with the elements themselves (though we could also just keep the top monomials)
+        return x
+    end
+
+    if iszero(x)
+        return x
+    end
+        
+    if Λ.page==2 # homology
+        if !is_homogeneous(x)
+            @warn "I won't reduce non-homogeneous elements"
+            return x
+        end
+        x = AlgebraElem(Λ.parent,x.w) # put it back in the previous algebra
+        d = degree(x)
+        z = zero(Λ)
+
+        while !iszero(x)
+            m,c = leading_monomial(x)
+#            @info "RED" x m=>c
+            if m∈Λ[d]
+                push!(z.w,m=>c)
+#                @info "CYCLE" cycle(Λ.parent,m)
+                x -= c*cycle(Λ.parent,m)
+            else
+#                @info "BDRY" boundary(Λ.parent,m,d)
+                x -= c*boundary(Λ.parent,m,d)
+            end
+        end
+        
+        return z
+    end
+
+    @error "I haven't tested how to reduce in higher pages"
+
     x
+end
+
+function make_cycle(x::AlgebraElem)
+    if iszero(differential(x))
+        return x
+    end
+    if length(x)>1
+        error("Can't convert $x to cycle")
+    end
+    m,c = leading_monomial(x)
+    c*cycle(x.parent.parent,m)
 end
 
 function Base.:*(x::AlgebraElem{p,Names},y::AlgebraElem{p,Names}) where {p,Names}
     Λ = x.parent
     @assert Λ == y.parent
     result = zero(x)
+    if Λ.page>1
+        x = make_cycle(x)
+        y = make_cycle(y)
+    end
     for (xk,xv)=x, (yk,yv)=y
         @timeit_debug to "add_monomial(*)" add_monomial!(result,xk*yk,xv*yv)
     end
-    reduce(Λ,result)
+    reduce!(Λ,result)
 end
 
 function add_differential!(result::AlgebraElem{p,Names}, u::Monomial{p,Names}, sign::GF{p}) where {p,Names}
@@ -421,11 +505,11 @@ end
 
 """Complete monomial `m` to a cycle
 """
-function cycle(Λ::Algebra{p,Names},m::Monomial{p,Names}) where {p,Names}
+function cycle(Λ::Algebra{p,Names},m₀::Monomial{p,Names}) where {p,Names}
     result = zero(Λ)
-    add_monomial!(result,m)
+    add_monomial!(result,m₀)
     
-    δ = differential(Λ,m)
+    δ = differential(Λ,m₀)
     if !iszero(δ)
         δdegree = degree(δ)
         range = Λ[δdegree]
@@ -483,8 +567,8 @@ function tag_basis!(Λ::Algebra{p,Names}, source::Basis{p,Names}, range::Basis{p
                     @timeit_debug to "tagger" γ = deep_tagger(Λ,m,range.degree)
                 else
                     if is_alive(y)
-                        settag!(source,i,y.v=>zero(GF{p}),Λ.page[])
-                        settag!(range,j,x.v=>inv(c),Λ.page[])
+                        settag!(source,i,y.v=>zero(GF{p}),Λ.page)
+                        settag!(range,j,x.v=>inv(c),Λ.page)
                         break
                     end
                     γ = y.tag
@@ -513,7 +597,7 @@ function prebasis(Λ::Algebra{p,Names},degree::Degree) where {p,Names}
     end
 
     for g::Gen{p,Names}=1:NGEN
-        Λ.dimension[]<0 && !is_lambda(g) && continue
+        Λ.dimension<0 && !is_lambda(g) && continue
 
         newdegree = degree - Λ.degree[g]
         any(<(0),newdegree) && continue
@@ -521,7 +605,7 @@ function prebasis(Λ::Algebra{p,Names},degree::Degree) where {p,Names}
         for x=basis
             β = x.v
             is_admissible_product(g,β) || continue
-            if !is_alive(x) && Λ.dimension[]≠0 # don't prune if dimension=0
+            if !is_alive(x) && Λ.dimension≠0 # don't prune if dimension=0
                 γ = x.tag.first
                 is_admissible_product(g,γ) && continue
             end
@@ -538,13 +622,14 @@ end
 
 Caches the basis of `Λ` up to total degree `total`, and marks its tags.
 """
-function cache_basis!(Λ::Algebra,total::Int)
-    while Λ.total[]<total
-        Λ.total[] += 1
+function cache_basis!(Λ::Algebra,total::Int,μtotal::Int=-1)
+    while Λ.total<total
+        Λ.total += 1
 
-        for hom=0:Λ.total[]
-            top = Λ.total[]-hom
+        for hom=0:Λ.total
+            top = Λ.total-hom
             for μ=0:hom
+                μtotal≠-1 && μtotal < μ && continue
                 degree = (μ=μ,λ=hom-μ,top=top)
                 @timeit_debug to "prebasis" Λ.basis[degree] = prebasis(Λ,degree)
             end
@@ -552,9 +637,10 @@ function cache_basis!(Λ::Algebra,total::Int)
 
         # we can do this in parallel, since all μ's operate independently
         #@threads # speedup seems to be only 50%
-        for μ=0:Λ.total[]-1
-            for λ=0:Λ.total[]-μ-1
-                top = Λ.total[]-λ-μ
+        for μ=0:Λ.total-1
+            μtotal≠-1 && μtotal < μ && continue            
+            for λ=0:Λ.total-μ-1
+                top = Λ.total-λ-μ
                 source = (μ=μ,λ=λ,top=top)
                 range = (μ=μ,λ=λ+1,top=top-1)
                 @timeit_debug to "tag_basis!" tag_basis!(Λ,Λ.basis[source],Λ.basis[range])
@@ -577,30 +663,33 @@ function truncate!(Λ::Algebra{p,Names},max_dimension::Int) where {p,Names}
             end
         end
     end
-    Λ.dimension[] = max_dimension
+    Λ.dimension = max_dimension
     Λ
 end
-Base.truncate(Λ::Algebra{p,Names},max_dimension::Int) where {p,Names} = truncate!(copy(Λ),max_dimension)
+function Base.truncate(Λ::Algebra{p,Names},max_dimension::Int) where {p,Names}
+    L = copy(Λ)
+    L.parent = Λ.parent==nothing ? Λ : Λ.parent
+    truncate!(L,max_dimension)
+end
 
-"""homology!(Λ)
+"""homology(Λ)
 
 Removes all source and range monomials from the differential.
-
-Returns the number of removed differentials.
 """
-function homology!(Λ::Algebra)
+function homology(Λ::Algebra)
     count = 0
-
-    foreach(values(Λ.basis)) do b
+    L = copy(Λ)
+    
+    foreach(values(L.basis)) do b
         cancelled = [!is_alive(x) for x=b]
         deleteat!(b,cancelled)
         count += Base.count(cancelled)
     end
     @assert iseven(count) # we delete twice, at source and range
-    Λ.page[] += 1
-    count÷2
+    L.page += 1
+    L.parent = Λ.parent==nothing ? Λ : Λ.parent
+    L
 end
-homology(Λ::Algebra) = (L = copy(Λ); homology!(L); L)
 
 function mark_differentials!(source::Vector{Basis{p,Names}},range::Vector{Basis{p,Names}},page::Int) where {p,Names}
     M = length(source)
@@ -649,10 +738,10 @@ compatible with the suspension maps `Λ[n] → Λ[n+1]`.
 Returns the number of new differentials.
 """
 function mark_differentials!(Λ::Vector{Algebra{p,Names}}, d::Degree) where {p,Names}
-    total = Λ[1].total[]
-    page = Λ[1].page[]
-    @assert all(L->L.total[]==total,Λ)
-    @assert all(L->L.page[]==page,Λ)
+    total = Λ[1].total
+    page = Λ[1].page
+    @assert all(L->L.total==total,Λ)
+    @assert all(L->L.page==page,Λ)
     @assert d.top == -1
     @assert d.λ ≥ 1
     @assert d.μ ≥ 0
@@ -673,25 +762,24 @@ function mark_differentials!(Λ::Vector{Algebra{p,Names}}, d::Degree) where {p,N
 end
 mark_differentials!(Λ::Vector{Algebra{p,Names}}, μ::Int, λ::Int) where {p,Names} = mark_differentials!(Λ,(μ=μ,λ=λ,top=-1))
 
-function Base.getindex(Λ::Algebra,degree::Degree)
-    cache_basis!(Λ,degree.μ+degree.λ+degree.top)
-    Λ.basis[degree]
+function Base.getindex(Λ::Algebra{p,Names},degree::Degree) where {p,Names}
+    if Λ.page==1
+        cache_basis!(Λ,degree.μ+degree.λ+degree.top,degree.μ)
+    end
+    get!(Λ.basis,degree,Basis{p,Names}(degree))
 end
 
-Base.getindex(Λ::Algebra,i::Int,j::Int,top::Int) = Λ[(μ=i,λ=j,top=top)]
+Base.getindex(Λ::Algebra,i::Int,j::Int,top::Int) = [AlgebraElem(Λ,x.v) for x=Λ[(μ=i,λ=j,top=top)]]
 
-function Base.getindex(Λ::Algebra,::Colon,j::Int,top::Int)
-    vcat((Λ.basis[(μ=μ,λ=j,top=top)].data for μ=0:Λ.total[]-j-top)...)
-end
+Base.getindex(Λ::Algebra,::Colon,j::Int,top::Int) = vcat((Λ[μ,j,top] for μ=0:Λ.total-j-top)...)
 
-function Base.getindex(Λ::Algebra,ij::Int,top::Int)
-    cache_basis!(Λ,ij+top)
-    vcat((Λ.basis[(μ=μ,λ=ij-μ,top=top)].data for μ=0:ij)...)
-end
+Base.getindex(Λ::Algebra,i::Int,::Colon,top::Int) = vcat((Λ[i,λ,top] for λ=0:Λ.total-i-top)...)
 
-function Base.getindex(Λ::Algebra,top::Int)
-    vcat((Λ.basis[(μ=i,λ=j,top=top)].data for i=0:top for j=0:top-i)...)
-end
+Base.getindex(Λ::Algebra,ij::Int,top::Int) = vcat((Λ[i,ij-i,top] for i=0:ij)...)
+
+Base.getindex(Λ::Algebra,::Colon,::Colon,top::Int) = vcat((Λ[i,j,top] for i=0:top for j=0:top-i)...)
+
+Base.getindex(Λ::Algebra,::Colon,::Colon,::Colon) = vcat((Λ[:,:,top] for top=1:Λ.total)...)
 
 function Base.getindex(Λ::Algebra{p,Names},m::Monomial{p,Names}) where {p,Names}
     d = degree(Λ,m)

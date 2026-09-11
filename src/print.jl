@@ -7,7 +7,7 @@ function print_curtis_table(io::IO, Λ::Algebra, totaldegree::Int)
         for hom=1:totaldegree-top
             first = true
             for μ=hom:-1:0
-                basis = Λ.basis[(μ=μ,λ=hom-μ,top=top)]
+                basis = get(Λ.basis,(μ=μ,λ=hom-μ,top=top),Nothing[])
                 for x=basis
                     if !is_tagger(x)
                         if first
@@ -55,7 +55,7 @@ function print_grid(io::IO, Λ::Algebra{p}; top_degree = nothing, names = nothin
             end
             entries = String[]
             for μ=0:hom
-                basis = Λ.basis[(μ=μ,λ=hom-μ,top=top)]
+                basis = get(Λ.basis,(μ=μ,λ=hom-μ,top=top),Nothing[])
                 i = 0
                 for x=basis
                     i += 1
@@ -189,7 +189,7 @@ function pdf_grid(name::AbstractString, Λ::Algebra{p}; top_degree = nothing, na
                 print_grid(f, Λ, top_degree=top_degree, names=names, backend=:tikz)
             end
             out = IOBuffer()
-            if !success(pipeline(`xelatex $tex`,stdout=out))
+            if !success(pipeline(`lualatex $tex`,stdout=out)) # lualatex because of memory usage
                 @error String(take!(out))
             end
             mv(tex[1:end-3]*"pdf",name,force=true)
