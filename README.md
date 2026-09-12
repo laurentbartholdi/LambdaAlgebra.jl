@@ -27,3 +27,22 @@ print_grid(LL[3],backend=:html) # print a page of the spectral sequence, in html
 
 open("xxx.tex","w") do f; print_grid(f,LL[3],backend=:tikz) end # or in tex
 ```
+
+## Unstable periodic algebra
+
+```julia
+A, lambda, v = periodic_algebra(p=3, dimension=3, top_degree=100)
+H = homology(A)
+LambdaAlgebra.curtis_stats(A)
+```
+
+Finite odd sphere dimensions now use context-sensitive Curtis pruning: a
+suffix is reduced at the instability bound induced by its prefix. Set
+`curtis=false` for an unpruned reference computation at small degrees.
+
+The existing `top_degree` keyword bounds **total degree** `μ+λ+top`.
+The periodic and usual implementations agree in the tested positive degrees;
+the periodic implementation additionally retains the degree-zero `v₀` tower.
+See [the algorithm and proof](docs/unstable-periodic.md) and
+[benchmarks and limitations](benchmark/results.md), including the currently
+unmet goal of a complete computation through topological dimension 500.
