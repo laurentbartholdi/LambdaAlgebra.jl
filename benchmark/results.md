@@ -23,7 +23,8 @@ auxiliary contexts**, and returned the identical homology signature.
 
 ## Validation
 
-The committed test suite passes 7,828 checks. Independent full-matrix oracles
+The committed test suite passes 7,857 checks, including the explicit v0
+tag-propagation counterexample. Independent full-matrix oracles
 cover p=3 at sphere dimensions 1, 3, 5 (total cutoffs 24, 28, 24), and p=5 at
 sphere dimensions 3 and 7 (cutoff 32). Comparisons with the usual lambda-mu
 implementation cover S³ at p=3 through total degree 64, plus other odd spheres
@@ -33,7 +34,43 @@ through 80; this larger comparison is not part of the routine test suite.
 The large-run table above reports computed homology counts, not independent
 full-matrix certification at total degree 120. The low-degree independent
 oracles and the contextual cancellation argument validate the algorithm;
-the ordinary algebra comparison is explicitly limited to the ranges listed.
+the ordinary algebra comparison is explicitly limited to the ranges listed
+and to the additional benchmark comparison below.
+
+## Periodic versus usual lambda-mu
+
+Measured with Julia 1.11.7, one thread, p=3 and S³, after warming both
+implementations at total degree 24. Each row starts a fresh algebra and
+includes construction, Curtis reduction, truncation where applicable, and
+`homology(A)`. All μ-degrees within the total cutoff are included. These
+are single wall-clock measurements, not statistical estimates; they include
+garbage collection and differ from the incremental timings above.
+
+| Total-degree cutoff | Usual lambda-mu | Periodic | Positive-degree homology classes |
+| ---: | ---: | ---: | ---: |
+| 40 | 1.125 s | 1.834 s | 45 |
+| 60 | 1.446 s | 2.303 s | 117 |
+| 80 | 1.919 s | 3.321 s | 240 |
+| 100 | 6.575 s | 12.508 s | 466 |
+
+The positive-degree homology signatures agree in every tridegree at each
+cutoff, extending the integrated comparison through total degree 100.
+The usual implementation is faster in these runs. This is a comparison
+of the current implementations, not an intrinsic complexity claim about
+the two algebraic models. Explicit cycle reconstruction is not timed.
+
+At cutoff 100, the periodic engine retains 8,806 `(μ,t,D)` contexts with
+19,558 basis entries in total, plus its public basis and arithmetic caches.
+These contexts are individual degree diagonals at required sphere bounds,
+not 8,806 complete unstable algebras. The usual public basis has 999 entries
+after truncation; this count excludes the stable entries discarded during
+construction and is not a peak-memory comparison.
+
+Reproduce with:
+
+```sh
+julia --project=. benchmark/compare_variants.jl 40 60 80 100
+```
 
 ## Dimension 500 is not yet achieved
 

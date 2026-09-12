@@ -121,6 +121,22 @@ For a fixed `t`, every first lambda index is at most `floor(t/(2p−2))`.
 Bounds above `2floor(t/(2p−2))+1` describe the same complex. Canonicalizing
 D at that value prevents an unbounded family of identical auxiliary tables.
 
+The code computes these `(μ,t,D)` tables on demand and shares repeated
+requests. A request for S³ therefore computes parts of several other sphere
+complexes, but does not compute every sphere through the full requested
+cutoff. Only the requested sphere's tables are published in `A.basis`.
+
+For comparison, the usual lambda-mu implementation first computes one stable
+Curtis table and then truncates it. There the instability dimension is the
+encoded first generator, so the allowed monomials form an initial segment
+of the monomial order in each degree. Smaller correction terms remain
+allowed whenever the leading source is allowed. In the periodic algebra,
+the first lambda index and the entire v-prefix weight enter the bound, and
+that initial-segment property fails, as the v₀ example below demonstrates.
+The auxiliary contexts are a sufficient way to handle this failure; no
+claim is made that separate context tables are an unavoidable or optimal
+representation. A direct timing comparison is in `benchmark/results.md`.
+
 The implementation also checks that every pivot produced during elimination
 satisfies the current instability bound. A missing implied tag, a wrong
 leading coefficient, or a failure of the expected triangular order raises
