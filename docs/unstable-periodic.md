@@ -217,6 +217,55 @@ The omitted tag still participates in reconstructing this cycle. Omitting
 a paired source/target means recovering their cancellation when needed,
 not replacing both monomials by zero inside every expression.
 
+### A tag that cannot be propagated from S³
+
+At p=3, put
+
+```math
+x=v_1^3\lambda_2\lambda_1,\qquad
+z=v_0^3\lambda_3\lambda_2\lambda_1,\qquad
+a=v_0^3\lambda_5\lambda_1.
+```
+
+On S³ the Curtis table pairs x with z. More precisely, the raw differential
+is `d(x)=z+v₁³λ₁³`; eliminating the larger term gives the completed source
+`X=v₁³(λ₂λ₁+λ₁λ₂)`, with
+
+```math
+dX=v_0^3\lambda_3(\lambda_2\lambda_1+\lambda_1\lambda_2).
+```
+
+Both v₀x and v₀z are allowed on S³. Nevertheless, the S³ tag x→z must
+not be used to omit v₀x: the smaller source v₀a becomes allowed and owns
+the pivot v₀z. Indeed, a first appears on S⁵, whereas v₀a first appears
+on S³. In the inequality `k≤n+w(P)`, a requires `5≤1+3`, which fails,
+but v₀a requires `5≤1+4`, which holds.
+
+The implementation removes v₀ and consults the **S⁵** suffix table.
+In that table a owns z with pivot coefficient −1, and x survives.
+Consequently v₀x is stored as an unpaired entry on S³. The omitted pivot
+v₀z is recovered from v₀a, not v₀x. With `curtis=false`, these same
+source and target entries are explicit and give the same answer.
+
+The cycle returned by `cycle` for the leading monomial v₀x is
+
+```math
+C=v_0v_1^3(\lambda_2\lambda_1+\lambda_1\lambda_2)
+ +v_0^4(\lambda_5\lambda_1+\lambda_4\lambda_2-\lambda_2\lambda_4)
+ -v_0^3v_1\lambda_2\lambda_3.
+```
+
+Every term is allowed on S³, `dC=0`, and C represents the retained class
+in `(μ,λ,top)=(4,2,22)`. Thus v₀a is a correction to the cycle led by
+v₀x; it is not the differential target of v₀x (both have lambda length
+two). The regression test checks the tags in both sphere contexts, this
+exact cycle, and agreement with pruning disabled.
+
+This example illustrates why a converse tag-propagation statement between
+tables at the same fixed sphere bound fails. Prefixing by v₀ changes which
+smaller sources can compete. The appropriate suffix table must already
+include those sources before its cancellations can be reused.
+
 ## Arithmetic and storage
 
 The private engine uses sparse dictionaries over GF(p), memoizes generator

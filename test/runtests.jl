@@ -137,6 +137,44 @@ end
         C1,_,_=periodic_algebra(p=3,dimension=1,top_degree=28)
         @test signature(B)==signature(C1)
     end
+    @testset "A new smaller source after prefixing v0, pruning=$prune" for prune in (true,false)
+        A,l,v=periodic_algebra(p=3,dimension=3,top_degree=28,μ_degree=4,curtis=prune)
+        monomial(w)=LA.leading_monomial(w).first
+        x=v[2]^3*l[2]*l[1]
+        a=v[1]^3*l[5]*l[1]
+        z=v[1]^3*l[3]*l[2]*l[1]
+        vx=v[1]*x; va=v[1]*a; vz=v[1]*z
+        @test dimension(a)==5
+        @test dimension(va)==3
+        # On S^3, x owns z. This tag must NOT be multiplied by v0.
+        @test A[degree(x)][monomial(x)][2].tag.first==monomial(z)
+        @test A[degree(z)][monomial(z)][2].tag==(monomial(x)=>LA.GF{3}(1))
+        # Removing v0 changes the suffix context to S^5, where the smaller
+        # source a is allowed and x survives instead of owning z.
+        child=LA.context_table(A.curtis,3,24,5)
+        @test LA.is_alive(child[3][monomial(x)][2])
+        expected_tag=monomial(a)=>LA.GF{3}(-1)
+        if prune
+            @test child[4][monomial(z)][1]==0
+            @test LA.context_deep(A.curtis,monomial(z),degree(z),5)==expected_tag
+            @test A[degree(va)][monomial(va)][1]==0
+            @test A[degree(vz)][monomial(vz)][1]==0
+            @test LA.deep_tagger(A,monomial(vz),degree(vz))==(monomial(va)=>LA.GF{3}(-1))
+        else
+            @test child[4][monomial(z)][2].tag==expected_tag
+            @test A[degree(vz)][monomial(vz)][2].tag==(monomial(va)=>LA.GF{3}(-1))
+        end
+        @test LA.is_alive(A[degree(vx)][monomial(vx)][2])
+        expected_cycle=v[1]*v[2]^3*(l[2]*l[1]+l[1]*l[2]) +
+            v[1]^4*(l[5]*l[1]+l[4]*l[2]-l[2]*l[4]) -
+            v[1]^3*v[2]*l[2]*l[3]
+        c=cycle(A,monomial(vx))
+        @test c==expected_cycle
+        @test iszero(differential(c))
+        @test dimension(c)==3
+        @test monomial(c)==monomial(vx)
+        @test degree(c)==(μ=4,λ=2,top=22)
+    end
     @testset "Generator capacity and input bounds" begin
         A,l,v=periodic_algebra(p=3,dimension=3)
         @test degree(l[125]).top==499
