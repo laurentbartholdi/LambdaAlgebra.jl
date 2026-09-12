@@ -21,6 +21,8 @@ include("print.jl")
 ################################################################
 # the periodic lambda algebra, with generators vᵢ,λᵢ
 include("periodic.jl")
+include("periodic_words.jl")
+include("periodic_curtis.jl")
 
 ################################################################
 # the classical lambda algebra, with generators λᵢ,μᵢ

@@ -28,7 +28,7 @@ Base.:-(a::Degree,b::Degree) = Degree(values(a).-values(b))
 
 ################################################################
 # Gen, λ or μ or v
-const NGEN = 100
+const NGEN = 256
 
 struct Gen{p,Names}
     x::Int16
@@ -59,7 +59,12 @@ Monomial{p,Names}() where {p,Names} = Monomial{p,Names}([])
 Monomial(i::Gen{p,Names}) where {p,Names} = Monomial([i])
 Base.length(m::Monomial) = length(m.v)
 Base.size(m::Monomial) = size(m.v)
-Base.:*(g::Gen{p,Names},m::Monomial{p,Names}) where {p,Names} = Monomial([g;m])
+function Base.:*(g::Gen{p,Names},m::Monomial{p,Names}) where {p,Names}
+    word=Vector{Gen{p,Names}}(undef,length(m)+1)
+    word[1]=g
+    copyto!(word,2,m.v,1,length(m))
+    Monomial(word)
+end
 Base.:*(m::Monomial{p,Names},n::Monomial{p,Names}) where {p,Names} = Monomial(vcat(m.v,n.v))
 Base.getindex(m::Monomial,i::Int) = m.v[i]
 Base.getindex(m::Monomial,r::AbstractRange) = Monomial(m.v[r])
@@ -67,7 +72,13 @@ Base.setindex!(m::Monomial{p,Names},g::Gen{p,Names},i) where {p,Names} = setinde
 Base.iterate(m::Monomial,pos=1) = iterate(m.v,pos)
 Base.:(==)(m::Monomial{p,Names}, n::Monomial{p,Names}) where {p,Names} = m.v==n.v
 Base.isless(m::Monomial{p,Names}, n::Monomial{p,Names}) where {p,Names} = isless(m.v,n.v)
-Base.hash(m::Monomial, h::UInt64) = hash(m.v, h)
+function Base.hash(m::Monomial, h::UInt64)
+    h=hash(length(m),h)
+    for g in m.v
+        h=hash(g.x,h)
+    end
+    h
+end
 Base.copy(m::Monomial) = Monomial(copy(m.v))
 
 function Base.show(io::IO, m::Monomial)
@@ -98,8 +109,8 @@ is_alive(x::BASISENTRY) = x.page==LASTPAGE
 is_tagger(x::BASISENTRY) = !is_alive(x) && iszero(x.tag.second)
 is_taggee(x::BASISENTRY) = !is_alive(x) && !iszero(x.tag.second)
 
-struct Basis{p,Names} <: AbstractVector{BASISENTRY}
-    data::Vector{BASISENTRY}
+struct Basis{p,Names} <: AbstractVector{BASISENTRY{p,Names}}
+    data::Vector{BASISENTRY{p,Names}}
     lookup::Dict{Monomial{p,Names},Int}
     notag::Pair{Monomial{p,Names},GF{p}} # store it once
     degree::Degree
@@ -152,10 +163,10 @@ function Base.push!(b::Basis{p,Names},m::Monomial{p,Names};tag=b.notag,page=LAST
     else
         pos = searchsortedfirst(b.data,(m,),by=first)
         insert!(b.data,pos,(v=m,tag=tag,page=page))
-        push!(b.lookup,m=>pos)
         for (n,i)=b.lookup
             if i≥pos b.lookup[n] += 1 end
         end
+        push!(b.lookup,m=>pos)
     end
     b
 end
@@ -186,6 +197,8 @@ end
 
 ################################################################
 # Algebra
+abstract type AbstractCurtisCache end
+
 mutable struct Algebra{p,Names}
     rules::Matrix{Union{Nothing,Vector{Tuple{GF{p},Gen{p,Names},Gen{p,Names}}}}}
     diff::Vector{Vector{Tuple{GF{p},Gen{p,Names},Gen{p,Names}}}}
@@ -195,8 +208,9 @@ mutable struct Algebra{p,Names}
     page::Int # page number along spectral sequence
     parent::Union{Nothing,Algebra{p,Names}}
     dimension::Int # record which sphere dimension we're looking at
+    curtis::Union{Nothing,AbstractCurtisCache}
 end
-Algebra{p,Names}(rules,diff,degrees,dimension) where {p,Names} = Algebra{p,Names}(rules,diff,degrees,Dict(),-1,1,nothing,dimension)
+Algebra{p,Names}(rules,diff,degrees,dimension) where {p,Names} = Algebra{p,Names}(rules,diff,degrees,Dict(),-1,1,nothing,dimension,nothing)
 
 const STABLE_DIMENSION = typemax(Int)
 
@@ -206,7 +220,9 @@ end
 Base.show(io::IO, ::MIME"text/plain", Λ::Algebra) = show(io, Λ)
 
 function Base.copy(Λ::Algebra{p,Names}) where {p,Names}
-    Algebra{p,Names}(Λ.rules,Λ.diff,Λ.degree,Dict(k=>copy(b) for (k,b)=Λ.basis),Λ.total,Λ.page,Λ.parent,Λ.dimension)
+    L = Algebra{p,Names}(Λ.rules,Λ.diff,Λ.degree,Dict(k=>copy(b) for (k,b)=Λ.basis),Λ.total,Λ.page,Λ.parent,Λ.dimension,nothing)
+    Λ.curtis === nothing || (L.curtis = copy_curtis_cache(Λ.curtis,L))
+    L
 end
 
 ################################################################
@@ -226,6 +242,7 @@ Base.:(==)(x::AlgebraElem{p,Names},y::AlgebraElem{p,Names}) where {p,Names} = (n
 Base.hash(x::AlgebraElem,h::UInt64) = (hash(nonzero_dict(x.w),h))
 Base.iterate(x::AlgebraElem,state...) = iterate(x.w,state...)
 Base.length(x::AlgebraElem) = length(x.w)
+Base.eltype(::Type{AlgebraElem{p,Names}}) where {p,Names} = Pair{Monomial{p,Names},GF{p}}
 
 function Base.show(io::IO, x::AlgebraElem)
     first = true
@@ -247,7 +264,7 @@ end
 #Base.show(io::IO, ::MIME"text/plain", x::AlgebraElem) = show(io, x)
 
 Base.iszero(x::AlgebraElem) = all(iszero,values(x.w))
-Base.zero(Λ::Algebra) = AlgebraElem(Λ,SortedDict())
+Base.zero(Λ::Algebra{p,Names}) where {p,Names} = AlgebraElem(Λ,SortedDict{Monomial{p,Names},GF{p}}())
 Base.one(Λ::Algebra{p,Names}) where {p,Names} = AlgebraElem(Λ,SortedDict(Monomial{p,Names}()=>one(GF{p})))
 Base.zero(x::AlgebraElem) = zero(x.parent)
 Base.one(x::AlgebraElem) = one(x.parent)
@@ -596,7 +613,7 @@ function prebasis(Λ::Algebra{p,Names},degree::Degree) where {p,Names}
         return b
     end
 
-    for g::Gen{p,Names}=1:NGEN
+    for g::Gen{p,Names}=eachindex(Λ.degree)
         Λ.dimension<0 && !is_lambda(g) && continue
 
         newdegree = degree - Λ.degree[g]
