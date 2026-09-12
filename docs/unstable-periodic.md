@@ -117,9 +117,15 @@ algorithm proceeds by increasing lambda length, completing the incoming
 map before using its target as a source. The inherited cancellations and
 ordinary field elimination consequently preserve homology at every step.
 
-For a fixed `t`, every first lambda index is at most `floor(t/(2p−2))`.
-Bounds above `2floor(t/(2p−2))+1` describe the same complex. Canonicalizing
-D at that value prevents an unbounded family of identical auxiliary tables.
+For fixed `(μ,t)`, every first lambda index is at most `floor(t/(2p−2))`,
+and the v-prefix has weight at least μ. Thus bounds at or above
+
+```math
+D_{\mathrm{sat}}=\max\bigl(1,2\lfloor t/(2p-2)\rfloor+1-2\mu\bigr)
+```
+
+describe the same complex. The implementation replaces D by
+`min(D,D_sat)`. Accounting for μ here removes many duplicate suffix tables.
 
 The code computes these `(μ,t,D)` tables on demand and shares repeated
 requests. A request for S³ therefore computes parts of several other sphere
@@ -284,17 +290,41 @@ include those sources before its cancellations can be reused.
 
 ## Arithmetic and storage
 
-The private engine uses sparse dictionaries over GF(p), memoizes generator
-multiplication in admissible form, and builds differentials recursively by
-the Leibniz rule. It retains reduced rows for explicit tags. Implied rows
-are reconstructed from suffix tags and cached separately. Prefixing a cycle
-has zero Leibniz correction, so those rows can be lifted directly.
+The public monomial representation and API are unchanged. Internally, sparse
+rows use 32-bit word identifiers. Words share their suffixes and store runs
+of repeated generators together, so operations on v₀ powers and λ₁ powers
+do not repeatedly copy long generator vectors. Cycle prefixes in implied
+boundary rows remain factored until subtraction. Explicit tags still retain
+their normalized boundary rows, and other implied rows are reconstructed
+from the correct suffix context.
+
+Products and differentials of v-powers use binomial formulas directly. For
+j>0, writing q=p^(j−1),
+
+```math
+\lambda_a v_j^r=\sum_{k=0}^r\binom{r}{k}
+v_{j-1}^k v_j^{r-k}\lambda_{a+kq},
+\qquad
+d(v_j^r)=\sum_{k=1}^r\binom{r}{k}
+v_{j-1}^k v_j^{r-k}\lambda_{kq}.
+```
+
+The first formula follows inductively from the lambda-v commutation rule
+and Pascal's identity; the second follows by Leibniz and summing the first.
+Coefficients are computed in GF(p) before any monomials are expanded.
+In particular `d(v_j^(p^e))=v_(j-1)^(p^e) λ_(p^(j+e-1))`: all intermediate
+binomial terms vanish. v₀ commutes without a correction and has differential
+zero. Adem coefficients are also computed once during construction and
+reused for every first generator index.
 
 `cache_limit` bounds the **number of entries in each disposable cache**:
-normalized products, suffix differentials, and implied rows. When a cache
-fills, it is cleared and entries are recomputed as needed. Setting the limit
-to zero disables those caches. This is not a bound on total RAM: explicit
-tables/rows are retained, and one sparse row can have many terms.
+normalized products, suffix differentials, and implied rows. Two generations
+retain recently reused entries when the cache fills. Setting the limit to
+zero disables those caches. Between completed root diagonals, the word pool
+collects temporary nodes unreachable from the retained tables and caches,
+and reuses their slots. This is not a bound on total RAM: explicit tables
+and rows remain, and one sparse row can have many terms. `curtis_stats`
+reports both live `words` and allocated `word_slots`, as well as cache sizes.
 
 `curtis_stats(A).stored` includes the auxiliary contexts. Public bases are
 copies of their context tables, so `homology`, copying, and truncation cannot
@@ -316,7 +346,10 @@ Gaussian elimination. This oracle uses neither suffix tables nor pruning.
 It also checks d²=0, compares the memoized differential with the public one,
 checks completed cycles and their instability, compares with the usual
 lambda-mu algebra at p=3 and p=5, and exercises incremental cutoffs, truncation,
-copying, and disabled caches.
+copying, and disabled caches. Packed differentials are compared directly with
+the independent public differential. Additional checks cover the binomial
+power formulas, word ordering, word collection and slot reuse, and bounded
+cache eviction.
 
 Performance measurements and the outstanding dimension-500 goal are recorded
 in `benchmark/results.md`. There is no claim here that dimension 500 has been

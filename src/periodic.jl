@@ -42,7 +42,13 @@ function periodic_algebra(;p=3, top_degree=-1, μ_degree=-1, dimension=STABLE_DI
         isodd(dimension) && dimension > 0 || throw(ArgumentError("the unstable periodic algebra requires a positive odd sphere dimension"))
     end
     
-    A(k,j) = K((-1)^(j+1) * binomial(big(p-1)*(k-j)-1,j))
+    # The same Adem coefficient is used for every possible first index.
+    # Compute it once, rather than repeatedly evaluating large binomials.
+    coefficients=zeros(K,NLAMBDA,NLAMBDA)
+    for k=1:NLAMBDA, j=0:k-1
+        coefficients[j+1,k]=K((-1)^(j+1)*binomial(big(p-1)*(k-j)-1,j))
+    end
+    A(k,j) = coefficients[j+1,k]
 
     GEN = Gen{p,LAMBDAV}
     λGen(i) = GEN(i)
@@ -61,14 +67,14 @@ function periodic_algebra(;p=3, top_degree=-1, μ_degree=-1, dimension=STABLE_DI
         end
     end
     for i=1:NLAMBDA, k=0:NLAMBDA-p*i # λ's don't increase too much
-        rule = []
+        rule = Tuple{K,GEN,GEN}[]
         for j=0:k-1
             iszero(A(k,j)) || push!(rule,(A(k,j),λGen(i+k-j),λGen(p*i+j)))
         end
         rules[λGen(i),λGen(p*i+k)] = rule
     end
     
-    diff = Vector{Vector{Tuple{K,Gen,Gen}}}(undef,ngen)
+    diff = Vector{Vector{Tuple{K,GEN,GEN}}}(undef,ngen)
     for k=1:NLAMBDA
         diff[λGen(k)] = [(A(k,j),λGen(k-j),λGen(j)) for j=1:k-1 if !iszero(A(k,j))]
     end

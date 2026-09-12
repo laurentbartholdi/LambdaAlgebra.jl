@@ -17,16 +17,26 @@ function pvadd!(out::PV{p},m,c) where p
         out[m]=z
     end
 end
-function pvsub!(out::PV{p},v::PV{p},c) where p
+function pvsub!(out::PV{p},v,c) where p
     for (m,a) in v
         pvadd!(out,m,-c*a)
     end
 end
 function genmul(O::PeriodicOps{p},g,m) where p
-    gm=g*m
     if is_admissible_product(g,m)
-        return PV{p}(gm=>one(GF{p}))
+        return PV{p}(g*m=>one(GF{p}))
+    elseif !is_lambda(g)
+        # A v-generator only needs insertion in the sorted polynomial prefix.
+        # No Adem expansion or intermediate dictionaries are involved.
+        word=copy(m.v)
+        pos=1
+        while pos<=length(word) && !is_lambda(word[pos]) && word[pos]<g
+            pos+=1
+        end
+        insert!(word,pos,g)
+        return PV{p}(Monomial(word)=>one(GF{p}))
     end
+    gm=g*m
     haskey(O.products,gm) && return O.products[gm]
     result=PV{p}()
     # Normalize the suffix first; cache only non-admissible joins.
@@ -63,28 +73,34 @@ function pvleading(x)
     m=>x[m]
 end
 
+# Even the smallest v-prefix has weight mu. Above this bound every lambda
+# word in the diagonal is allowed, so all larger contexts are identical.
+periodic_bound(mu,t,D,p)=min(D,max(1,2div(t,2p-2)+1-2mu))
+
 mutable struct PeriodicCurtis{p} <: AbstractCurtisCache
     algebra::Algebra{p,LAMBDAV}
     tables::Dict{NTuple{3,Int},Vector{Basis{p,LAMBDAV}}} # (μ, λ+top, sphere bound)
     prune::Bool
     omitted::Int
-    rows::Dict{Tuple{Int,Int,Int,Monomial{p,LAMBDAV}},PV{p}} # explicit normalized boundaries
-    ops::PeriodicOps{p}
-    inherited_rows::Dict{Tuple{Int,Int,Int,Monomial{p,LAMBDAV}},PV{p}}
+    rows::Dict{Tuple{Int,Int,Int,WordID},WordPoly{p}}
+    ops::PeriodicWords{p}
+    inherited_rows::PeriodicCache{Tuple{Int,Int,Int,WordID},WordPoly{p}}
+    lookups::Dict{NTuple{4,Int},Dict{WordID,Int}}
     published::Set{Tuple{Int,Int}}
     cache_limit::Int
 end
 function PeriodicCurtis(A::Algebra{p,LAMBDAV};prune=true,cache_limit=50000) where p
     cache_limit >= 0 || throw(ArgumentError("cache_limit must be nonnegative"))
-    PeriodicCurtis{p}(A,Dict(),prune,0,Dict(),PeriodicOps(A,cache_limit),Dict(),Set(),cache_limit)
+    PeriodicCurtis{p}(A,Dict(),prune,0,Dict(),PeriodicWords(A,cache_limit),
+        PeriodicCache{Tuple{Int,Int,Int,WordID},WordPoly{p}}(cache_limit),Dict(),Set(),cache_limit)
 end
 function copy_curtis_cache(E::PeriodicCurtis{p},A) where p
-    PeriodicCurtis{p}(A,E.tables,E.prune,E.omitted,E.rows,E.ops,E.inherited_rows,copy(E.published),E.cache_limit)
+    PeriodicCurtis{p}(A,E.tables,E.prune,E.omitted,E.rows,E.ops,E.inherited_rows,E.lookups,copy(E.published),E.cache_limit)
 end
 function context_table(E::PeriodicCurtis{p},mu::Int,t::Int,D::Int) where p
     q=2p-2
     # Larger bounds admit exactly the same monomials in this diagonal.
-    D=min(D,2div(t,q)+1)
+    D=periodic_bound(mu,t,D,p)
     key=(mu,t,D)
     haskey(E.tables,key) && return E.tables[key]
     bs=Basis{p,LAMBDAV}[]
@@ -94,7 +110,8 @@ function context_table(E::PeriodicCurtis{p},mu::Int,t::Int,D::Int) where p
         if mu==l==t==0
             push!(b,Monomial{p,LAMBDAV}())
         else
-            for gx in eachindex(E.algebra.degree)
+            generators=mu==0 ? (1:min(div(t,q),(D-1)÷2)) : ((NGEN-NV):length(E.algebra.degree))
+            for gx in generators
                 g=Gen{p,LAMBDAV}(gx)
                 dg=E.algebra.degree[g]
                 nd=d-dg
@@ -119,6 +136,7 @@ function context_table(E::PeriodicCurtis{p},mu::Int,t::Int,D::Int) where p
             end
         end
         push!(bs,b)
+        E.lookups[(mu,t,D,l)]=Dict(wordid(E.ops,x.v)=>i for (i,x) in enumerate(b))
         l>0 && context_tag!(E,bs[l],b,D)
     end
     E.tables[key]=bs
@@ -144,53 +162,87 @@ function context_deep(E::PeriodicCurtis{p},m::Monomial{p,LAMBDAV},deg::Degree,D:
     end
     error("missing tag $m at $D $deg")
 end
-function context_row(E::PeriodicCurtis{p},m::Monomial{p,LAMBDAV},deg::Degree,D::Int) where p
-    D=min(D,2div(deg.λ+deg.top,2p-2)+1)
+function worddeep(E::PeriodicCurtis{p},m::WordID,deg::Degree,D::Int) where p
+    O=E.ops; prefix=Int16[]; sign=one(GF{p})
+    while O.tails[m]!=0
+        g=O.heads[m]; m=wordtail(O,m)
+        m==1 && break
+        push!(prefix,g)
+        dg=E.algebra.degree[g]; deg-=dg
+        if g<NGEN-NV
+            sign=-sign; D=2p*g-1
+        else
+            D+=dg.top+2
+        end
+        t=deg.λ+deg.top; D=periodic_bound(deg.μ,t,D,p)
+        bs=context_table(E,deg.μ,t,D)
+        j=get(E.lookups[(deg.μ,t,D,deg.λ)],m,0)
+        if j!=0
+            x=bs[deg.λ+1][j]
+            if !is_alive(x)
+                iszero(x.tag.second) && error("source suffix")
+                source=wordid(O,x.tag.first)
+                for h in Iterators.reverse(prefix)
+                    source=wordcons(O,h,source)
+                end
+                return source=>sign*x.tag.second
+            end
+        end
+    end
+    error("missing implied word tag")
+end
+function context_wordrow(E::PeriodicCurtis{p},m::WordID,deg::Degree,D::Int) where p
+    D=periodic_bound(deg.μ,deg.λ+deg.top,D,p)
     key=(deg.μ,deg.λ+deg.top,D,m)
     haskey(E.rows,key) && return E.rows[key]
-    haskey(E.inherited_rows,key) && return E.inherited_rows[key]
-    g=m[1]
+    cached=get(E.inherited_rows,key,nothing)
+    cached!==nothing && return cached
+    O=E.ops; g=O.heads[m]
     # With a cycle prefix there is no d(g)X correction.
     if isempty(E.algebra.diff[g])
         nd=deg-E.algebra.degree[g]
-        DD=is_lambda(g) ? 2p*index(g)-1 : D+E.algebra.degree[g].top+2
-        Y=context_row(E,m[2:end],nd,DD)
-        return PV{p}(g*w=>a for (w,a) in Y)
+        DD=g<NGEN-NV ? 2p*g-1 : D+E.algebra.degree[g].top+2
+        Y=context_wordrow(E,wordtail(O,m),nd,DD)
+        return wordprefix(O,g,Y)
     end
     # A stored tag records the leading source, not its completed preimage.
     # Eliminate larger pivots to reconstruct its normalized full boundary.
-    tag=context_deep(E,m,deg,D)
-    delta=PV{p}(m=>tag.second*c for (m,c) in pvdiff(E.ops,tag.first))
+    tag=worddeep(E,m,deg,D)
+    delta=WordPoly{p}(m=>tag.second*c for (m,c) in worddiff(O,tag.first))
     while true
-        n,c=pvleading(delta)
+        n,c=wordleading(O,delta)
         if n==m
             isone(c) || error("bad lifted coefficient $m $c")
             break
         end
-        isless(m,n) || error("missing leading target $m: $delta")
-        Y=context_row(E,n,deg,D)
-        pvsub!(delta,Y,c)
+        wordless(O,m,n) || error("missing leading target $m: $delta")
+        Y=context_wordrow(E,n,deg,D)
+        wordsub!(delta,Y,c)
     end
-    length(E.inherited_rows) >= E.cache_limit && empty!(E.inherited_rows)
-    E.cache_limit > 0 && (E.inherited_rows[key]=delta)
+    E.inherited_rows[key]=delta
     delta
 end
+function context_row(E::PeriodicCurtis{p},m::Monomial{p,LAMBDAV},deg::Degree,D::Int) where p
+    PV{p}(publicword(E.ops,w)=>c for (w,c) in context_wordrow(E,wordid(E.ops,m),deg,D))
+end
 function context_tag!(E::PeriodicCurtis{p},source,range,D) where p
+    O=E.ops
+    lookup=E.lookups[(range.degree.μ,range.degree.λ+range.degree.top,D,range.degree.λ)]
     for (i,x) in enumerate(source)
         is_alive(x) || continue
-        delta=copy(pvdiff(E.ops,x.v))
+        delta=copy(worddiff(O,wordid(O,x.v)))
         while !isempty(delta)
-            m,c=pvleading(delta)
-            dimension(E.algebra,m)<=D || error("unstable differential $m from $(x.v) at $D")
-            j,y=range[m]
+            m,c=wordleading(O,delta)
+            worddimension(O,m)<=D || error("unstable differential $m from $(x.v) at $D")
+            j=get(lookup,m,0); y=j==0 ? nothing : range[j]
             if j!=0 && is_alive(y)
-                settag!(source,i,m=>zero(GF{p}),1)
+                settag!(source,i,publicword(O,m)=>zero(GF{p}),1)
                 settag!(range,j,x.v=>inv(c),1)
-                E.rows[(range.degree.μ,range.degree.λ+range.degree.top,D,m)]=PV{p}(m=>inv(c)*a for (m,a) in delta)
+                E.rows[(range.degree.μ,range.degree.λ+range.degree.top,D,m)]=WordPoly{p}(m=>inv(c)*a for (m,a) in delta)
                 break
             end
-            Y=context_row(E,m,range.degree,D)
-            pvsub!(delta,Y,c)
+            Y=context_wordrow(E,m,range.degree,D)
+            wordsub!(delta,Y,c)
         end
     end
 end
@@ -216,9 +268,51 @@ function _publish_periodic!(A,E::PeriodicCurtis{p},total,mu_limit) where p
             A.basis[b.degree]=copy(b)
         end
         push!(E.published,(mu,t))
+        length(E.ops.nodes)>=E.ops.next_collection && collect_periodic_words!(E)
     end
     A.total=max(A.total,total)
     A
+end
+
+# Run only between completed root diagonals: all live internal IDs are then
+# reachable from these tables and caches. Freed IDs retain no external API.
+function collect_periodic_words!(E::PeriodicCurtis)
+    O=E.ops; marked=falses(length(O.heads)); marked[1]=true
+    function mark(id)
+        while id!=0 && !marked[id]
+            marked[id]=true
+            id=O.tails[id]
+        end
+    end
+    for id in keys(O.public_words)
+        mark(id)
+    end
+    for lookup in values(E.lookups), id in keys(lookup)
+        mark(id)
+    end
+    for (key,row) in E.rows
+        mark(key[4])
+        foreach(mark,keys(row))
+    end
+    for cache in (E.inherited_rows.recent,E.inherited_rows.previous), (key,row) in cache
+        mark(key[4])
+        foreach(mark,keys(row))
+    end
+    for cache in (O.products.recent,O.products.previous,O.diffs.recent,O.diffs.previous), (id,row) in cache
+        mark(id)
+        foreach(mark,keys(row))
+    end
+    freed=0
+    for id=2:length(O.heads)
+        if O.heads[id]!=0 && !marked[id]
+            delete!(O.nodes,(O.heads[id],O.runs[id],O.tails[id]))
+            O.heads[id]=0; O.runs[id]=0; O.tails[id]=0
+            push!(O.free,WordID(id))
+            freed+=1
+        end
+    end
+    O.next_collection=max(200000,2length(O.nodes))
+    freed
 end
 function deep_tagger(A::Algebra{p,LAMBDAV},m::Monomial,deg::Degree) where p
     A.curtis === nothing && return invoke(deep_tagger,Tuple{Algebra,Monomial,Degree},A,m,deg)
@@ -253,6 +347,8 @@ function curtis_stats(A::Algebra{p,LAMBDAV}) where p
      omitted=E.omitted,
      explicit_rows=length(E.rows),
      inherited_rows=length(E.inherited_rows),
+     words=length(E.ops.nodes)+1,
+     word_slots=length(E.ops.heads),
      products=length(E.ops.products),
      differentials=length(E.ops.diffs))
 end

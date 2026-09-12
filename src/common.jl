@@ -59,7 +59,12 @@ Monomial{p,Names}() where {p,Names} = Monomial{p,Names}([])
 Monomial(i::Gen{p,Names}) where {p,Names} = Monomial([i])
 Base.length(m::Monomial) = length(m.v)
 Base.size(m::Monomial) = size(m.v)
-Base.:*(g::Gen{p,Names},m::Monomial{p,Names}) where {p,Names} = Monomial([g;m])
+function Base.:*(g::Gen{p,Names},m::Monomial{p,Names}) where {p,Names}
+    word=Vector{Gen{p,Names}}(undef,length(m)+1)
+    word[1]=g
+    copyto!(word,2,m.v,1,length(m))
+    Monomial(word)
+end
 Base.:*(m::Monomial{p,Names},n::Monomial{p,Names}) where {p,Names} = Monomial(vcat(m.v,n.v))
 Base.getindex(m::Monomial,i::Int) = m.v[i]
 Base.getindex(m::Monomial,r::AbstractRange) = Monomial(m.v[r])
@@ -67,7 +72,13 @@ Base.setindex!(m::Monomial{p,Names},g::Gen{p,Names},i) where {p,Names} = setinde
 Base.iterate(m::Monomial,pos=1) = iterate(m.v,pos)
 Base.:(==)(m::Monomial{p,Names}, n::Monomial{p,Names}) where {p,Names} = m.v==n.v
 Base.isless(m::Monomial{p,Names}, n::Monomial{p,Names}) where {p,Names} = isless(m.v,n.v)
-Base.hash(m::Monomial, h::UInt64) = hash(m.v, h)
+function Base.hash(m::Monomial, h::UInt64)
+    h=hash(length(m),h)
+    for g in m.v
+        h=hash(g.x,h)
+    end
+    h
+end
 Base.copy(m::Monomial) = Monomial(copy(m.v))
 
 function Base.show(io::IO, m::Monomial)

@@ -57,6 +57,7 @@ function rank_mod_p(mat,p)
 end
 function matrix_signature(A::LA.Algebra{p,LA.LAMBDAV},T,D) where p
     h=Dict{LA.Degree,Int}(); ops=LA.PeriodicOps(A,1000)
+    words=LA.PeriodicWords(A,1000)
     for t=0:2p-2:T, mu=0:T-t
         bs=[full_basis(A,mu,t,l,D) for l=0:t÷(2p-2)]
         ranks=zeros(Int,length(bs)+1)
@@ -66,6 +67,9 @@ function matrix_signature(A::LA.Algebra{p,LA.LAMBDAV},T,D) where p
             for (i,m) in enumerate(bs[j])
                 delta=differential(A,m)
                 @test Dict(w=>c for (w,c) in delta if !iszero(c)) == LA.pvdiff(ops,m)
+                id=LA.wordid(words,m)
+                packed=LA.worddiff(words,id)
+                @test Dict(LA.publicword(words,w)=>c for (w,c) in packed)==LA.pvdiff(ops,m)
                 @test iszero(differential(delta))
                 for (w,c) in delta
                     iszero(c) && continue
@@ -183,6 +187,55 @@ end
         @test_throws ArgumentError periodic_algebra(dimension=0)
         @test_throws ArgumentError periodic_algebra(dimension=3,cache_limit=-1)
         @test_throws ArgumentError LA.cache_basis!(A,(2*3-2)*(LA.NGEN-LA.NV-1)+1)
+    end
+    @testset "Interned words and saturated sphere contexts" begin
+        A,l,v=periodic_algebra(p=3,dimension=3,top_degree=32)
+        O=A.curtis.ops
+        examples=[one(A),l[1],l[1]^2,l[1]^3,l[2],l[2]*l[1],
+                  v[1],v[1]^2,v[1]*l[1],v[1]*v[2],v[2]^2*l[1],v[end]]
+        monomials=[LA.leading_monomial(w).first for w in examples]
+        ids=[LA.wordid(O,m) for m in monomials]
+        for (m,id) in zip(monomials,ids)
+            delete!(O.public_words,id)
+            @test LA.publicword(O,id)==m
+            @test LA.wordid(O,LA.publicword(O,id))==id
+        end
+        @test all(LA.wordless(O,a,b)==isless(m,n) for (a,m) in zip(ids,monomials), (b,n) in zip(ids,monomials))
+        @test all(LA.publicword(O,LA.wordcat(O,a,b))==m*n for (a,m) in zip(ids,monomials), (b,n) in zip(ids,monomials))
+        # At (mu,t)=(4,24), D>=5 already admits the entire diagonal:
+        # first lambda index <=6, and every v-prefix has weight >=4.
+        @test LA.context_table(A.curtis,4,24,5)===LA.context_table(A.curtis,4,24,13)
+        before=signature(A)
+        LA.wordnode(O,Int16(200),17,LA.WordID(1)) # unreachable temporary
+        @test LA.collect_periodic_words!(A.curtis)>0
+        @test signature(A)==before
+        LA.cache_basis!(A,40)
+        B,_,_=periodic_algebra(p=3,dimension=3,top_degree=40)
+        @test signature(A)==signature(B)
+        @test all(LA.wordid(O,LA.publicword(O,id))==id for id in keys(O.public_words))
+        for limit in (0,1,2,3,10)
+            cache=LA.PeriodicCache{Int,Int}(limit)
+            for k=1:30
+                cache[k]=k*k
+                @test length(cache)<=limit
+                @test get(cache,k,nothing)==(limit==0 ? nothing : k*k)
+            end
+        end
+    end
+    @testset "Binomial formulas for commuting powers, p=$p" for p in (3,5)
+        A,l,v=periodic_algebra(p=p,dimension=3)
+        O=A.curtis.ops
+        unpack(poly)=Dict(LA.publicword(O,w)=>c for (w,c) in poly)
+        for j=1:2, n in (1,2,p,p+1,9)
+            tail=v[j+1]^n*v[j+2]^2*l[2]
+            m=LA.leading_monomial(tail).first
+            id=LA.wordid(O,m)
+            expected=Dict(w=>c for (w,c) in differential(tail) if !iszero(c))
+            @test unpack(LA.worddiff(O,id))==expected
+            expected=Dict(w=>c for (w,c) in l[2]*tail if !iszero(c))
+            @test unpack(LA.wordproduct(O,Int16(2),id))==expected
+        end
+        @test differential(v[2]^p)==v[1]^p*l[p]
     end
     @testset "Basis insertion indices" begin
         M=LA.Monomial{3,LA.LAMBDAV}; G=LA.Gen{3,LA.LAMBDAV}

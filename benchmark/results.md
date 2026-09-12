@@ -23,7 +23,7 @@ auxiliary contexts**, and returned the identical homology signature.
 
 ## Validation
 
-The committed test suite passes 7,857 checks, including the explicit v0
+The optimized test suite passes 9,984 checks, including the explicit v0
 tag-propagation counterexample. Independent full-matrix oracles
 cover p=3 at sphere dimensions 1, 3, 5 (total cutoffs 24, 28, 24), and p=5 at
 sphere dimensions 3 and 7 (cutoff 32). Comparisons with the usual lambda-mu
@@ -72,6 +72,54 @@ Reproduce with:
 julia --project=. benchmark/compare_variants.jl 40 60 80 100
 ```
 
+## Optimized implementation
+
+The optimization keeps the public API and the contextual Curtis matching.
+It adds interned words with compressed generator runs, direct binomial
+formulas for products and differentials of v-powers, tighter saturation of
+sphere bounds, two-generation disposable caches, and collection of temporary
+word nodes. Construction reuses each Adem coefficient instead of recomputing
+it for every generator pair. Expanded preimages and eager reduction of row
+tails were tested and rejected because they were slower. An experimental
+v₀-module computation was not adopted; it is not part of this implementation.
+
+Fresh, sequential runs with the same Julia version, prime, sphere, warm-up
+and complete total-degree cutoffs as above gave:
+
+| Total-degree cutoff | Usual lambda-mu | Optimized periodic | Periodic allocated bytes | Positive-degree classes |
+| ---: | ---: | ---: | ---: | ---: |
+| 80 | 1.921 s | 0.514 s | 135,122,816 | 240 |
+| 100 | 5.408 s | 3.408 s | 502,967,880 | 466 |
+| 120 | 52.829 s | 63.585 s | 4,588,957,856 | 829 |
+
+Each row includes construction and `homology(A)`, but not reconstruction of
+cycle representatives. Allocated bytes are cumulative allocation traffic,
+not peak RAM. The benchmark checks equality of the entire positive-degree
+homology signature at every cutoff; the independent full-matrix oracle is
+still limited to the smaller test ranges above.
+
+At cutoff 100, periodic time fell from 12.508 s to 3.408 s (3.7 times faster)
+and allocations from 3,963,982,704 to 502,967,880 bytes (7.9 times less).
+The optimized periodic implementation is faster than the usual one at 80
+and 100, but remains slower at 120. Intermediate boundary reconstruction
+still grows rapidly; fewer basis monomials do not remove that cost.
+
+The tighter sphere bound reduces auxiliary contexts at cutoff 100 from
+8,806 to 2,916, and their basis entries from 19,558 to 16,572. In an incremental
+run through 120, the collected word pool ended with 790,653 live nodes in
+1,798,578 allocated slots; without collection and the binomial power formulas,
+the compact-word prototype retained 7,309,513 nodes. These word counts are
+not total-memory measurements.
+
+The final suite passes 9,984 checks, including direct comparisons of the
+compact differential with the public differential, p=3 and p=5 power formulas,
+the user's unstable tag example, sphere-context saturation, and cache/word
+collection. Run the comparison with:
+
+```sh
+julia --project=. benchmark/compare_variants.jl 80 100 120
+```
+
 ## Dimension 500 is not yet achieved
 
 A run requesting checkpoints through total degree 500 completed 120 and was
@@ -85,6 +133,9 @@ large sparse expressions and grows rapidly beyond total degree 100. Caching
 normal forms improves this but does not remove the growth. Reaching the stated
 500 target needs a further improvement to that reduction stage, rather than
 just increasing the generator array or omitting more monomials without proof.
+The optimization above improves the achieved range's time and allocation
+costs, but does not complete the dimension-500 target. Its larger incremental
+run was stopped during cutoff 140 after completing 120.
 
 Run the same benchmark with:
 

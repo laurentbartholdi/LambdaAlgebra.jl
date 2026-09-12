@@ -17,7 +17,8 @@ function measure_periodic(T)
     stats=LA.curtis_stats(A) # periodic only; ordinary uses no context engine
     (seconds=r.time,allocated_bytes=r.bytes,gc_seconds=r.gctime,
      public_entries=sum(length,values(A.basis)),contexts=stats.contexts,
-     context_entries=stats.stored,positive_classes=sum(values(signature))),signature
+     context_entries=stats.stored,words=stats.words,word_slots=stats.word_slots,
+     positive_classes=sum(values(signature))),signature
 end
 
 function measure_usual(T)
